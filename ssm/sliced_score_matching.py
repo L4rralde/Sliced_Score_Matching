@@ -1,50 +1,52 @@
 import torch
+import torch.nn.functional as F
+
+
+class ScoreNet(torch.nn.Module):
+    def __init__(self, n: int) -> None:
+        super().__init__()
+        self.n = n
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(n, 256),
+            torch.nn.ReLU(),
+            torch.nn.Linear(256, 256),
+            torch.nn.ReLU(),
+            torch.nn.Linear(256, n)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        #x Tensor B x n
+        return self.net(x) # B x n
 
 
 class SlicedScoreMatching(torch.nn.Module):
     def __init__(self,
         score_net: torch.nn.Module,
-        m: int = 1
     ) -> None:
         super().__init__()
         self.score_net = score_net
-        self.m = m
 
     def forward(self, x: torch.Tensor) -> tuple:
-        #FIXME
-        x.requires_grad_(True)
+        x = x.clone().detach().requires_grad_(True)
+
+        #s_m(x; theta)
         score = self.score_net(x) #B x n
+        
+        #Random directions. 
+        vectors = torch.randn_like(x) #B x n
+        vectors = F.normalize(vectors, dim=-1) # B x n
 
-        loss_1 = 0.5 * torch.norm(score, dim=-1)**2 # 1/2 ||score||*2. Vector of dimension B.
+        #Projections. v^Ts_m(x; theta)
+        projections = (vectors * score).sum(dim=-1) #B, v^T s
+        #v^T \nabla s_m(x; theta) = grad(v^Ts_m(x, theta), x)
+        grad2 = torch.autograd.grad(projections.sum(), x, create_graph=True)[0] #B x n
 
-        batch_size, n = x.shape
-        vectors = torch.randn(
-            self.m, batch_size, n,
-            dtype=x.dtype,
-            device=x.device
-        )
-        vectors = vectors / torch.norm(vectors, dim=-1, keepdim=True)
-        vectors = vectors.view(self.m, batch_size, n, 1) # M x B x n x 1
+        #J = 1/2 ||score||_2^2
+        loss_1 = 0.5 * (score * score).sum(dim=-1) #B
+        #J_2 = v^T \nabla s_m(x; theta) v
+        loss2 = torch.sum(vectors * grad2, dim=-1) #B
 
-        score = score.view(1, batch_size, n, 1) #1 x B x n x 1
+        # J = J + v^T \nabla s_m(x; theta) v
+        loss = (loss_1 + loss2).mean()
 
-        projections = torch.matmul(
-            vectors.transpose(-1, -2),
-            score
-        ) #M x B x 1 x 1
-
-        gradv = torch.autograd.grad(
-            projections.sum(),
-            x,
-            create_graph=True
-        )[0] #B x n.
-        gradv = gradv.view(1, batch_size, n, 1)
-
-        gradv_v = (vectors*gradv) #M x B x n x 1
-        gradv_v = gradv_v.squeeze(-1) # M x B x n
-        loss_2 = torch.sum(gradv_v, dim=-1) #M x B
-        loss_2 = loss_2.mean(dim=0) #Vector of dimension B.
-
-        loss = (loss_1 + loss_2).mean() #Scalar
-
-        return score.view(batch_size, n), loss
+        return loss
