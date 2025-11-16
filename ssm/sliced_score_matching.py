@@ -27,7 +27,8 @@ class SlicedScoreMatching(torch.nn.Module):
         self.score_net = score_net
 
     def forward(self, x: torch.Tensor) -> tuple:
-        x = x.clone().detach().requires_grad_(True)
+        #x = x.clone().detach().requires_grad_(True) #to detach or to not?
+        x = x.clone().requires_grad_(True)
 
         #s_m(x; theta)
         score = self.score_net(x) #B x n
