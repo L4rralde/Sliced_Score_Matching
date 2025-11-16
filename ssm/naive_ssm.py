@@ -50,9 +50,9 @@ class ScoreNet(nn.Module):
         return self.net(x) # B x n
 
     def sample(self, n_samples: int=1, T: int=10) -> torch.Tensor:
+        delta = 1/T
         with torch.no_grad():
             x = torch.rand(n_samples, self.n)
-            delta = 1/T
             for _ in range(T):
                 x = x + delta*self.net(x) + torch.randn_like(x)*(2*delta)**0.5
         
@@ -86,7 +86,7 @@ def sliced_score_estimation(
     # J = J + v^T \nabla s_m(x; theta) v
     loss = loss_1 + loss2
 
-    return loss.mean(), loss_1.mean, loss2.mean() 
+    return loss.mean(), loss_1.mean(), loss2.mean() 
 
 
 def train(
@@ -111,6 +111,7 @@ def train(
 
             batch_size = x.size(0)
             x = x.view(batch_size, -1).to(device)
+            x = x + 0.1*torch.randn_like(x)
             loss, *_ = sliced_score_estimation(x, score_net)
 
             loss.backward()

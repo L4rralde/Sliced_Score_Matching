@@ -28,7 +28,7 @@ def main():
         sliced_score_estimation=ssm.sliced_score_estimation,
         optimizer=optimizer,
         train_dataloader=train_dataloader,
-        epochs=20,
+        epochs=50,
         device=device,
     )
 

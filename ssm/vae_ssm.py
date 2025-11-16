@@ -42,7 +42,7 @@ class MLPDecoder(nn.Module):
         with torch.no_grad():
             z = torch.randn(n_samples, self.z_dim) #B x z_dim
             logits = self.mlp(z)
-            samples = self.sigmoid(logits)
+            samples = torch.sigmoid(logits)
             samples = samples.view(n_samples, 1, 28, 28)
 
         return samples
@@ -67,6 +67,34 @@ class MLPScore(nn.Module):
         Xz = torch.cat([X, z], dim=-1) #B x (n + z_dim). [X, z] per sample
         h = self.mlp(Xz) #B x z_dim
         return h
+
+    def sample(self, n_samples: int = 1) -> torch.Tensor:
+        raise NotImplementedError("Requires X as input :(")
+
+class MLPLatentScore(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.z_dim = config.z_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(self.z_dim, 256),
+            nn.Tanh(),
+            nn.Linear(256, 256),
+            nn.Tanh(),
+            nn.Linear(256, self.z_dim)
+        )
+
+    def forward(self, X: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        #z must be B x z_dim
+        h = self.mlp(z) #B x z_dim
+        return h
+
+    def sample(self, n_samples: int=1, T: int=100) -> torch.Tensor:
+        delta = 1/T
+        with torch.no_grad():
+            z = torch.randn(n_samples, self.z_dim)
+            for _ in range(T):
+                z = z + delta*self.mlp(z) + torch.randn_like(z)*(2*delta)**0.5
+        return z
 
 
 class MLPImplicitEncoder(nn.Module):
@@ -102,9 +130,9 @@ def elbo_ssm(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     #1. Compute ssm_loss
     #X in B x 28 x 28
-    #dup_X = X.unsqueeze(0).expand(1, *X.shape).contiguous().view(-1, *X.shape[1:])
+    dup_X = X.unsqueeze(0).expand(1, *X.shape).contiguous().view(-1, *X.shape[1:])
+    #dup_X = X.clone()
     #dup_X in B x 28 x 28. Same shape. However, it is another object.
-    dup_X = X.clone()
     z = imp_encoder(X) #B x z_dim
     ssm_loss, *_ = sliced_score_estimation_vr(functools.partial(score, dup_X), z)
     #ssm_loss in R
@@ -145,12 +173,11 @@ def sliced_score_estimation_vr(
     samples: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     #samples in B x z_dim. samples are latent vectors, i.e., samples in Z
-    #dup_samples = samples.unsqueeze(0).expand(1, *samples.shape).contiguous().view(-1, *samples.shape[1:])
-    dup_samples = samples.clone()
+    dup_samples = samples.unsqueeze(0).expand(1, *samples.shape).contiguous().view(-1, *samples.shape[1:])
+    #dup_samples = samples.clone()
     dup_samples.requires_grad_(True) #B x z_dim. Same shape as samples. dup_samples has the same data, but is another object.
-    #dup_samples = dup_samples.clone()
-    #dup_samples.requires_grad(True)
     vectors = torch.randn_like(dup_samples) #B x z_dim. B vectors drawn from N(0, I_{z_dim}).
+    #vectors = torch.nn.functional.normalize(vectors, dim=-1)
 
     #score_net already includes X (the image), but as a constant. refer to functools.partial(score_net, X)
     #Then, the following runs score_net.forward(X, dup_samples).
@@ -243,7 +270,7 @@ def main():
     dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
     imp_encoder = MLPImplicitEncoder(config).to(device)
     decoder = MLPDecoder(config).to(device)
-    score = MLPScore(config).to(device)
+    score = MLPLatentScore(config).to(device)
     
     try:
         train(imp_encoder, decoder, score, dataloader, config, device)
@@ -253,7 +280,10 @@ def main():
         os.makedirs('models', exist_ok=True)
         torch.save(imp_encoder.state_dict(), 'models/encoder.pth')
         torch.save(decoder.state_dict(), 'models/decoder.pth')
-        torch.save(score.state_dict(), 'models/score.pth')
+        if isinstance(score, MLPLatentScore):
+            torch.save(score.state_dict(), 'models/latent_score.pth')
+        else:
+            torch.save(score.state_dict(), 'models/score.pth')
 
 
 if __name__ == '__main__':
