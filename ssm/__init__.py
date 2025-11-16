@@ -1,3 +1,6 @@
-from .sliced_score_matching import SlicedScoreMatching, ScoreNet
-from .training import train
-from .mnist import make_datasets
+from .naive_ssm import (
+    ScoreNet,
+    sliced_score_estimation,
+    train,
+    make_datasets
+)

@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
@@ -18,16 +20,18 @@ def main():
     else:
         device = torch.device('cpu')
 
-    model = ssm.SlicedScoreMatching(ssm.ScoreNet(784)).to(device)
+    model = ssm.ScoreNet(784).to(device)
     optimizer = Adam(model.parameters(), lr=1e-3)
     
-    model, training_stats = ssm.train(
-        model=model,
+    training_stats = ssm.train(
+        score_net=model,
+        sliced_score_estimation=ssm.sliced_score_estimation,
         optimizer=optimizer,
         train_dataloader=train_dataloader,
-        epochs=100,
+        epochs=20,
         device=device,
     )
+
 
 
 if __name__ == '__main__':
