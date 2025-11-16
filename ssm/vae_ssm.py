@@ -88,8 +88,7 @@ class MLPLatentScore(nn.Module):
         h = self.mlp(z) #B x z_dim
         return h
 
-    def sample(self, n_samples: int=1, T: int=100) -> torch.Tensor:
-        delta = 1/T
+    def sample(self, n_samples: int=1, T: int=100, delta: float=1e-2) -> torch.Tensor:
         with torch.no_grad():
             z = torch.randn(n_samples, self.z_dim)
             for _ in range(T):
@@ -130,11 +129,10 @@ def elbo_ssm(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     #1. Compute ssm_loss
     #X in B x 28 x 28
-    dup_X = X.unsqueeze(0).expand(1, *X.shape).contiguous().view(-1, *X.shape[1:])
-    #dup_X = X.clone()
+    dup_X = X.clone()
     #dup_X in B x 28 x 28. Same shape. However, it is another object.
     z = imp_encoder(X) #B x z_dim
-    ssm_loss, *_ = sliced_score_estimation_vr(functools.partial(score, dup_X), z)
+    ssm_loss, *_ = sliced_score_estimation(functools.partial(score, dup_X), z)
     #ssm_loss in R
 
     # 1.1 Updates score_net with backpropagation
@@ -168,16 +166,14 @@ def elbo_ssm(
     return loss, ssm_loss, recon
 
 
-def sliced_score_estimation_vr(
+def sliced_score_estimation(
     score_net: Callable,
     samples: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     #samples in B x z_dim. samples are latent vectors, i.e., samples in Z
-    dup_samples = samples.unsqueeze(0).expand(1, *samples.shape).contiguous().view(-1, *samples.shape[1:])
-    #dup_samples = samples.clone()
+    dup_samples = samples.clone()
     dup_samples.requires_grad_(True) #B x z_dim. Same shape as samples. dup_samples has the same data, but is another object.
     vectors = torch.randn_like(dup_samples) #B x z_dim. B vectors drawn from N(0, I_{z_dim}).
-    #vectors = torch.nn.functional.normalize(vectors, dim=-1)
 
     #score_net already includes X (the image), but as a constant. refer to functools.partial(score_net, X)
     #Then, the following runs score_net.forward(X, dup_samples).
@@ -220,6 +216,7 @@ def train(
 
             decoder.train()
             imp_encoder.train()
+            score.train()
             loss, ssm_loss, *_ = elbo_ssm(
                 imp_encoder,
                 decoder,

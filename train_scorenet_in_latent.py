@@ -49,6 +49,8 @@ def main():
         print(e)
     finally:
         os.makedirs('models', exist_ok=True)
+        torch.save(imp_encoder.state_dict(), 'models/encoder.pth')
+        torch.save(decoder.state_dict(), 'models/decoder.pth')
         torch.save(score.state_dict(), 'models/latent_score.pth')
 
 if __name__ == '__main__':

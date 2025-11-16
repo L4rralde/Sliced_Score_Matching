@@ -49,10 +49,9 @@ class ScoreNet(nn.Module):
         #x Tensor B x n
         return self.net(x) # B x n
 
-    def sample(self, n_samples: int=1, T: int=10) -> torch.Tensor:
-        delta = 1/T
+    def sample(self, n_samples: int=1, T: int=100, delta:float=1e-2) -> torch.Tensor:
         with torch.no_grad():
-            x = torch.rand(n_samples, self.n)
+            x = 2*(torch.rand(n_samples, self.n) - 0.5)
             for _ in range(T):
                 x = x + delta*self.net(x) + torch.randn_like(x)*(2*delta)**0.5
         
@@ -60,33 +59,37 @@ class ScoreNet(nn.Module):
 
 
 def sliced_score_estimation(
-    x: torch.Tensor,
-    score_net: nn.Module
+    score_net: Callable,
+    samples: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    #x = x.clone().detach().requires_grad_(True) #to detach or to not?
-    x = x.clone().requires_grad_(True)
+    #creates a copy to set requires_grad.
+    dup_samples = samples.clone()
+    dup_samples.requires_grad_(True)
 
-    #Random directions. 
-    vectors = torch.randn_like(x) #B x n
-    vectors = nn.functional.normalize(vectors, dim=-1) # B x n
+    #Directions
+    #B x d. B vectors drawn from N(0, I_{d}).
+    vectors = torch.randn_like(dup_samples)
+    #Normalize directions.
 
-    #s_m(x; theta)
-    score = score_net(x) #B x n
+    #Gradients computation
+    #score_net(dup_samples) = s_m. B x d
+    score = score_net(dup_samples)
+    #(v^T s_m).sum(). Autograd.grad requires a scalar. So, sum() is used
+    gradv = torch.sum(score * vectors)
+    # v^T \nabla s_m = grad(v^T s_m) = auograd.grad(sum(v^T s_m)). # B x d
+    grad2 = torch.autograd.grad(gradv, dup_samples, create_graph=True)[0]
 
-    #Projections. v^Ts_m(x; theta)
-    projections = (vectors * score).sum(dim=-1) #B, v^T s
-    #v^T \nabla s_m(x; theta) = grad(v^Ts_m(x, theta), x)
-    grad2 = torch.autograd.grad(projections.sum(), x, create_graph=True)[0] #B x n
+    #Loss computation
+    # 1/2 ||s_m||^2. For a mini batch, this is in R^{B}
+    loss1 = torch.sum(score * score, dim=-1) / 2.
+    #v^T \nabla s_m v. Recall, for a sample, v^T \nabla s_m in R^d.
+    #   So v^T \nabla s_m v is scalar. 
+    #   Hence, considering batches, this is in R^{B}
+    loss2 = torch.sum(vectors * grad2, dim=-1)
+    loss = loss1 + loss2 #R^B
 
-    #J = 1/2 ||score||_2^2
-    loss_1 = 0.5 * (score * score).sum(dim=-1) #B
-    #J_2 = v^T \nabla s_m(x; theta) v
-    loss2 = torch.sum(vectors * grad2, dim=-1) #B
-
-    # J = J + v^T \nabla s_m(x; theta) v
-    loss = loss_1 + loss2
-
-    return loss.mean(), loss_1.mean(), loss2.mean() 
+    #Tuple of 3 tensors of shape empty shape, i.e, scalars
+    return loss.mean(), loss1.mean(), loss2.mean()
 
 
 def train(
@@ -111,8 +114,8 @@ def train(
 
             batch_size = x.size(0)
             x = x.view(batch_size, -1).to(device)
-            x = x + 0.1*torch.randn_like(x)
-            loss, *_ = sliced_score_estimation(x, score_net)
+            x = x + torch.randn_like(x)
+            loss, *_ = sliced_score_estimation(score_net, x)
 
             loss.backward()
             optimizer.step()
